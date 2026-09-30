@@ -10,7 +10,7 @@ function App() {
   return (
     <>
       <button onClick={async () =>{
-        const porta = await navigator.serial.requestPort();
+        const porta = await (navigator as any).serial.requestPort();
         await porta.open({ baudRate: 1000000 });
         const scrittore = porta.writable.getWriter();
         const lettore   = porta.readable.getReader();
