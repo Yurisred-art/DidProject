@@ -88,6 +88,8 @@ function App() {
   }
 
   /** Invia il ping (FF FF 01 02 01 FB) e mostra nel log la risposta grezza. */
+  const ping = () => eseguiComando([0xFF, 0xFF, 0x01, 0x02, 0x01, 0xFB])
+  /*
   const ping = () => serializza(async () => {
     const porta = portaRef.current
     const scrittore = porta.writable.getWriter();
@@ -115,6 +117,7 @@ function App() {
       lettore.releaseLock()
     }
   })
+  */
 
   /** Scrive i byte sulla seriale e legge la risposta con il parser a buffer persistente
    *  (i pacchetti frammentati vengono ricomposti). Termina dopo `silenzio` ms senza nuovi
@@ -195,11 +198,11 @@ function App() {
   const eseguiComando = async (daInviare: number[]) => {
     setOccupato(true)
     try {
-      aggiungi([{ testo: 'Inviato: ' + hex(daInviare) }])
+      aggiungi([{ testo: 'TX: ' + hex(daInviare) }])
       const ricevuti = await scambia(daInviare)
       aggiungi(ricevuti.map(p => p.ok
-        ? { testo: 'Ricevuto: ' + hex(p.bytes) + ' ✓ checksum OK' }
-        : { testo: `Ricevuto: ${hex(p.bytes)} ✗ checksum errato (atteso 0x${p.atteso.toString(16).padStart(2, '0').toUpperCase()})`, errore: true }))
+        ? { testo: 'RX: ' + hex(p.bytes) + ' ✓ checksum OK' }
+        : { testo: `RX: ${hex(p.bytes)} ✗ checksum errato (atteso 0x${p.atteso.toString(16).padStart(2, '0').toUpperCase()})`, errore: true }))
       if (ricevuti.length === 0) {
         aggiungi([{ testo: 'Nessun pacchetto completo ricevuto (timeout)', errore: true }])
       }
@@ -217,7 +220,7 @@ function App() {
     }
   }
 
-  /** Finché il toggle è attivo e la linea è aperta, invia CMD_TEMP ogni 0.5 s e
+  /** Finché il toggle è attivo e la linea è aperta, invia CMD_TEMP ogni 1 s e
    *  mostra il byte prima del checksum. Se il servo non risponde mostra "--°"
    *  e scrive un solo errore nel log. Il cleanup ferma il ciclo. */
   useEffect(() => {
@@ -252,8 +255,8 @@ function App() {
             erroreNotificato = true
           }
         }
-        // mantiene il periodo di 500 ms tra una lettura e l'altra
-        const resto = 500 - (Date.now() - inizio)
+        // mantiene il periodo di 1000 ms tra una lettura e l'altra
+        const resto = 1000 - (Date.now() - inizio)
         if (resto > 0) await pausa(resto)
       }
     })()
