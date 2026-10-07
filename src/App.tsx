@@ -3,12 +3,19 @@ import './App.css'
 
 const ID = 1  // ID del servo usato da Vai, croce direzionale e temperatura
 
+// il servo ha 4096 posizioni (0..4095): un valore più alto viene saturato dal firmware senza errori
+const POS_MAX = 4095
+
 // posizioni prefissate della croce (0 = giù, 4096 = giro intero)
 const POS = { giu: 0, sinistra: 1024, su: 2048, destra: 3072 }
 
 /** Formatta un array di byte in esadecimale: [255, 1] -> "0xFF 0x01" */
 const hex = (b: number[]) =>
   b.map(x => '0x' + x.toString(16).padStart(2, '0').toUpperCase()).join(' ')
+
+/** Vero se i due array contengono gli stessi byte nello stesso ordine. */
+const uguali = (a: number[], b: number[]) =>
+  a.length === b.length && a.every((x, i) => x === b[i])
 
 /** Calcola il checksum di un pacchetto completo: ~(ID + LEN + ... + ultimo parametro) & 0xFF.
  *  Esclude i due 0xFF iniziali e l'ultimo byte (il checksum stesso). */
@@ -27,11 +34,15 @@ const CMD_TEMP = costruisci(ID, 0x02, [0x3F, 0x01])
 /** Attende `ms` millisecondi (da usare con await). */
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-type Voce = { id: number; testo: string; errore?: boolean }                // riga del log
-type Pacchetto = { bytes: number[]; ok: boolean; atteso: number }          // pacchetto ricevuto + esito checksum
+type Voce = { id: number; testo: string; errore?: boolean }  // riga del log
+type Pacchetto = {
+  bytes: number[]    // pacchetto completo, intestazione e checksum compresi
+  ok: boolean        // esito del checksum
+  atteso: number     // checksum calcolato
+  eco: boolean       // true se è la copia della richiesta rimandata indietro dal bus
+}
 
 function App() {
-  const [count, setCount] = useState(0)
   const [aperta, setAperta] = useState(false)          // stato della linea seriale
   const [occupato, setOccupato] = useState(false)      // true mentre un comando è in esecuzione
   const [testo, setTesto] = useState('')               // campo esadecimale
@@ -40,9 +51,10 @@ function App() {
   const [temp, setTemp] = useState<number | null>(null)
   const [log, setLog] = useState<Voce[]>([])
   const portaRef = useRef<any>(null)
-  const buf = useRef<number[]>([])   // buffer del parser, persiste tra una lettura e l'altra
+  const buf = useRef<number[]>([])   // buffer del parser: accumula i byte finché il pacchetto è completo
   const nextId = useRef(0)           // contatore per le chiavi del log
   const coda = useRef<Promise<unknown>>(Promise.resolve())  // coda delle operazioni sulla seriale
+  const statoNotificato = useRef<Map<number, number>>(new Map())  // ultimo byte di stato segnalato per servo
 
   /** Esegue una sola operazione alla volta sulla seriale: ogni chiamata parte
    *  quando la precedente è finita. Evita conflitti di lock tra Ping, Invia,
@@ -57,6 +69,18 @@ function App() {
   const aggiungi = (voci: { testo: string; errore?: boolean }[]) => {
     const nuove = voci.map(v => ({ id: nextId.current++, ...v }))
     setLog(prev => [...nuove.reverse(), ...prev])
+  }
+
+  /** Controlla il byte di stato di una risposta (posizione 4) e lo scrive nel log solo
+   *  quando cambia, così il polling della temperatura non riempie il log. */
+  const controllaStato = (p: Pacchetto) => {
+    const id = p.bytes[2]
+    const stato = p.bytes[4]
+    if ((statoNotificato.current.get(id) ?? 0) === stato) return
+    statoNotificato.current.set(id, stato)
+    aggiungi([stato === 0
+      ? { testo: `Servo ${id}: byte di stato tornato a 0` }
+      : { testo: `Servo ${id}: byte di stato 0x${stato.toString(16).padStart(2, '0').toUpperCase()} (anomalia)`, errore: true }])
   }
 
   /** Chiede la porta all'utente e la apre a 1 Mbaud. */
@@ -83,46 +107,16 @@ function App() {
     } finally {
       portaRef.current = null
       buf.current = []
+      statoNotificato.current.clear()
       setAperta(false)
     }
   }
 
-  /** Invia il ping (FF FF 01 02 01 FB) e mostra nel log la risposta grezza. */
-  const ping = () => eseguiComando([0xFF, 0xFF, 0x01, 0x02, 0x01, 0xFB])
-  /*
-  const ping = () => serializza(async () => {
-    const porta = portaRef.current
-    const scrittore = porta.writable.getWriter();
-    const lettore   = porta.readable.getReader();
-    try {
-      const ping = [0xFF, 0xFF, 0x01, 0x02, 0x01, 0xFB];
-      await scrittore.write(new Uint8Array(ping));
-
-      // se entro 1 secondo non arriva nulla, annulla la lettura
-      const timer = setTimeout(() => lettore.cancel(), 1000)
-      const { value } = await lettore.read();
-      clearTimeout(timer)
-
-      if (value) {
-        const response = [...value];
-        console.log("risposta:", response);
-        aggiungi([{ testo: 'Ping, risposta: ' + hex(response) }])
-      } else {
-        aggiungi([{ testo: 'Ping: nessuna risposta dal dispositivo (timeout)', errore: true }])
-      }
-    } catch (e) {
-      aggiungi([{ testo: 'Errore: ' + String(e), errore: true }])
-    } finally {
-      scrittore.releaseLock()
-      lettore.releaseLock()
-    }
-  })
-  */
-
-  /** Scrive i byte sulla seriale e legge la risposta con il parser a buffer persistente
-   *  (i pacchetti frammentati vengono ricomposti). Termina dopo `silenzio` ms senza nuovi
-   *  byte, o dopo `primaAttesa` ms se non arriva nulla. Restituisce i pacchetti completi
-   *  con l'esito del checksum. */
+  /** Scrive i byte sulla seriale e legge la risposta con il parser a buffer.
+   *  Il bus rimanda indietro anche la richiesta (eco): il pacchetto uguale a quello inviato
+   *  viene marcato `eco` e non conta come risposta. Termina appena arriva un pacchetto che
+   *  non è l'eco, dopo `silenzio` ms senza nuovi byte, o dopo `primaAttesa` ms se non arriva
+   *  nulla. Restituisce i pacchetti trovati, con l'esito del checksum. */
   const scambia = (daInviare: number[], primaAttesa = 1000, silenzio = 300) =>
     serializza(async () => {
       const porta = portaRef.current
@@ -143,15 +137,32 @@ function App() {
           buf.current.push(...value)
           while (buf.current.length >= 4) {
             if (buf.current[0] !== 0xFF || buf.current[1] !== 0xFF) { buf.current.shift(); continue }
-            const totale = 4 + buf.current[3]          // FF FF + ID + LEN + corpo
-            if (buf.current.length < totale) break     // pacchetto incompleto
-            const p = buf.current.splice(0, totale)
+            const len = buf.current[3]
+            if (len < 2) { buf.current.shift(); continue }  // LEN impossibile: falsa intestazione
+            const totale = 4 + len                          // FF FF + ID + LEN + corpo
+            if (buf.current.length < totale) break          // pacchetto incompleto
+            const p = buf.current.slice(0, totale)
             const atteso = checksum(p)
-            trovati.push({ bytes: p, ok: atteso === p[p.length - 1], atteso })
+            const valido = atteso === p[p.length - 1]
+
+            if (uguali(p, daInviare)) {                     // eco della richiesta
+              trovati.push({ bytes: p, ok: valido, atteso, eco: true })
+              buf.current.splice(0, totale)
+            } else if (valido) {                            // risposta valida
+              const risposta = { bytes: p, ok: true, atteso, eco: false }
+              trovati.push(risposta)
+              buf.current.splice(0, totale)
+              controllaStato(risposta)
+            } else {                                        // falso pacchetto: avanza di un solo byte
+              trovati.push({ bytes: p, ok: false, atteso, eco: false })
+              buf.current.shift()
+            }
           }
+          if (trovati.some(p => !p.eco)) break              // risposta ricevuta: inutile aspettare ancora
         }
       } finally {
         clearTimeout(timer)
+        buf.current = []   // eventuali byte incompleti rimasti sono scarti: non devono bloccare lo scambio successivo
         scrittore.releaseLock()
         lettore.releaseLock()
       }
@@ -159,13 +170,11 @@ function App() {
     })
 
   /** Legge la posizione attuale del servo (READ di 2 byte all'indirizzo 0x38, little-endian).
-   *  Restituisce null se non arriva una risposta valida (scarta l'eventuale echo). */
+   *  Restituisce null se non arriva una risposta valida (l'eco è già esclusa). */
   const leggiPosizione = async (id: number): Promise<number | null> => {
     const pacchetti = await scambia(costruisci(id, 0x02, [0x38, 0x02]), 300, 50)
     const r = [...pacchetti].reverse().find(p =>
-      p.ok && p.bytes.length === 8 && p.bytes[2] === id &&
-      !(p.bytes[4] === 0x02 && p.bytes[5] === 0x38)   // scarta l'eventuale echo del comando
-    )
+      p.ok && !p.eco && p.bytes.length === 8 && p.bytes[2] === id)
     return r ? r.bytes[5] | (r.bytes[6] << 8) : null
   }
 
@@ -200,11 +209,14 @@ function App() {
     try {
       aggiungi([{ testo: 'TX: ' + hex(daInviare) }])
       const ricevuti = await scambia(daInviare)
-      aggiungi(ricevuti.map(p => p.ok
-        ? { testo: 'RX: ' + hex(p.bytes) + ' ✓ checksum OK' }
+      aggiungi(ricevuti.map(p =>
+        p.eco
+          ? { testo: 'Eco: ' + hex(p.bytes) }
+          : p.ok
+            ? { testo: 'RX: ' + hex(p.bytes) + ' ✓ checksum OK' }
         : { testo: `RX: ${hex(p.bytes)} ✗ checksum errato (atteso 0x${p.atteso.toString(16).padStart(2, '0').toUpperCase()})`, errore: true }))
-      if (ricevuti.length === 0) {
-        aggiungi([{ testo: 'Nessun pacchetto completo ricevuto (timeout)', errore: true }])
+      if (ricevuti.every(p => p.eco)) {
+        aggiungi([{ testo: 'Nessuna risposta dal servo (timeout)', errore: true }])
       }
 
       // se era una scrittura della posizione obiettivo (0x2A), legge dove arriva il servo
@@ -220,6 +232,9 @@ function App() {
     }
   }
 
+  /** Invia il ping (FF FF 01 02 01 FB) passando dagli stessi controlli degli altri comandi. */
+  const ping = () => eseguiComando(costruisci(ID, 0x01, []))
+
   /** Finché il toggle è attivo e la linea è aperta, invia CMD_TEMP ogni 1 s e
    *  mostra il byte prima del checksum. Se il servo non risponde mostra "--°"
    *  e scrive un solo errore nel log. Il cleanup ferma il ciclo. */
@@ -233,9 +248,9 @@ function App() {
         const inizio = Date.now()
         try {
           const pacchetti = await scambia(CMD_TEMP, 300, 50)
-          // risposta: FF FF 01 03 00 <temp> CHK (scarta l'eventuale echo del comando, lungo 8 byte)
+          // risposta: FF FF 01 03 00 <temp> CHK (l'eco del comando, lungo 8 byte, è esclusa)
           const r = pacchetti.find(p =>
-            p.ok && p.bytes.length === 7 && p.bytes[2] === ID && p.bytes[3] === 0x03)
+            p.ok && !p.eco && p.bytes.length === 7 && p.bytes[2] === ID && p.bytes[3] === 0x03)
           if (annullato) break
           if (r) {
             setTemp(r.bytes[r.bytes.length - 2])   // ultimo byte prima del checksum
@@ -283,11 +298,11 @@ function App() {
     eseguiComando(daInviare)
   }
 
-  /** Converte il valore decimale (0-65535) in FF FF 01 05 03 2A lo hi chk e lo invia. */
+  /** Converte il valore decimale (0-4095) in FF FF 01 05 03 2A lo hi chk e lo invia. */
   const vai = () => {
     const v = decimale.trim()
-    if (!/^\d+$/.test(v) || Number(v) > 65535) {
-      aggiungi([{ testo: 'Errore: inserisci un intero tra 0 e 65535', errore: true }])
+    if (!/^\d+$/.test(v) || Number(v) > POS_MAX) {
+      aggiungi([{ testo: `Errore: inserisci un intero tra 0 e ${POS_MAX}`, errore: true }])
       return
     }
     const pos = Number(v)
@@ -330,7 +345,7 @@ function App() {
           value={decimale}
           onChange={e => setDecimale(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !bloccato && vai()}
-          placeholder="Posizione (0-65535)"
+          placeholder={`Posizione (0-${POS_MAX})`}
           style={{ width: 150, fontFamily: 'monospace' }}
           disabled={bloccato}
         />
