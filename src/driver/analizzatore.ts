@@ -14,10 +14,10 @@ export const uguali = (a: number[], b: number[]) =>
 
 /** Checksum del corpo del pacchetto (ID LEN ISTR PARAMS...), senza i due 0xFF iniziali
  *  e senza il checksum stesso: ~somma & 0xFF. Esempio: checksum([0x01, 0x02, 0x01]) = 0xFB. */
-export const checksum = (corpo: number[]) => ~corpo.reduce((a, b) => a + b, 0) & 0xFF                                       //questa funzione viene usata per i test
+export const checksum = (corpo: number[]) => ~corpo.reduce((a, b) => a + b, 0) & 0xFF
 
 /** Calcola il checksum di un pacchetto completo: esclude i due 0xFF iniziali e l'ultimo byte. */
-const checksumPacchetto = (p: number[]) => checksum(p.slice(2, -1))                                                         // questa è usata nel parser
+const checksumPacchetto = (p: number[]) => checksum(p.slice(2, -1))
 
 export class Analizzatore {
   /** buffer: accumula i byte finché il pacchetto è completo */
