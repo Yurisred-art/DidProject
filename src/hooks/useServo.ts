@@ -7,10 +7,9 @@ import { WebSerial } from '../driver/webSerial'
 import type { Pacchetto } from '../driver/analizzatore'
 import {
   ID_DIFFUSIONE, ISTR, REG_POSIZIONE_OBIETTIVO,
-  comandoPing, comandoScriviPosizione, leggiPosizione, leggiTemperatura,
+  comandoPing, comandoScriviPosizione, leggiPosizione, leggiTemperatura, scriviPosizione,
 } from '../driver/sts3215'
-
-const ID = 1  // ID del servo usato da Vai, croce direzionale e temperatura
+import { SERVI } from '../config'
 
 /** Formatta un array di byte in esadecimale: [255, 1] -> "0xFF 0x01" */
 const hex = (b: number[]) =>
@@ -20,7 +19,10 @@ const hex = (b: number[]) =>
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 type Voce = { id: number; testo: string; errore?: boolean }  // riga del log
-type Telemetria = { temp: number | null }                    // grandezze mostrate in vista
+type Telemetria = Record<number, { temp: number | null }>   // grandezze mostrate in vista, per ID
+
+const telemetriaVuota = (): Telemetria =>
+  Object.fromEntries(SERVI.map(id => [id, { temp: null }]))
 
 export type ServoApi = ReturnType<typeof useServo>
 
@@ -33,9 +35,9 @@ export function useServo() {
   const [aperta, setAperta] = useState(false)          // stato della linea seriale
   const [occupato, setOccupato] = useState(false)      // true mentre un comando è in esecuzione
   const [tempAttiva, setTempAttiva] = useState(false)  // toggle temperatura
-  const [telemetria, setTelemetria] = useState<Telemetria>({ temp: null })
+  const [telemetria, setTelemetria] = useState<Telemetria>(telemetriaVuota)
   const [log, setLog] = useState<Voce[]>([])
-  const ultima = useRef<Telemetria>({ temp: null })    // ultimo valore acquisito: nessun render
+  const ultima = useRef<Telemetria>(telemetriaVuota()) // ultimo valore acquisito: nessun render
   const nextId = useRef(0)                             // contatore per le chiavi del log
   const statoNotificato = useRef<Map<number, number>>(new Map())  // ultimo byte di stato segnalato per servo
 
@@ -89,8 +91,9 @@ export function useServo() {
   }, [bus])
 
   /** Legge la posizione ogni 100 ms finché resta uguale per 3 letture consecutive
-   *  (massimo circa 4 s), poi scrive nel log la posizione raggiunta. */
-  const attendiPosizione = async (id: number, obiettivo?: number) => {
+   *  (massimo circa 4 s), poi scrive nel log la posizione raggiunta e la restituisce
+   *  (null se il servo non ha mai risposto). */
+  const attendiPosizione = async (id: number, obiettivo?: number): Promise<number | null> => {
     let ultimaPos: number | null = null
     let stabili = 0
     for (let i = 0; i < 40 && stabili < 2; i++) {
@@ -101,14 +104,15 @@ export function useServo() {
       else { ultimaPos = pos; stabili = 0 }
     }
     if (ultimaPos === null) {
-      aggiungi([{ testo: 'Posizione: nessuna risposta alla lettura', errore: true }])
-      return
+      aggiungi([{ testo: `Servo ${id}, posizione: nessuna risposta alla lettura`, errore: true }])
+      return null
     }
     aggiungi([{
-      testo: `Posizione raggiunta: ${ultimaPos} (0x${ultimaPos.toString(16).padStart(4, '0').toUpperCase()})` +
+      testo: `Servo ${id}, posizione raggiunta: ${ultimaPos} (0x${ultimaPos.toString(16).padStart(4, '0').toUpperCase()})` +
         (obiettivo !== undefined ? `, obiettivo ${obiettivo}` : '') +
         (stabili < 2 ? ' - ancora in movimento' : ''),
     }])
+    return ultimaPos
   }
 
   /** Invia un comando, mostra nel log pacchetti inviati e ricevuti (con checksum) e, se era
@@ -143,50 +147,79 @@ export function useServo() {
   }
 
   /** Invia il ping (FF FF 01 02 01 FB) passando dagli stessi controlli degli altri comandi. */
-  const ping = () => eseguiComando(comandoPing(ID))
+  const ping = (id: number) => eseguiComando(comandoPing(id))
 
-  /** Porta il servo a una posizione (usata da Vai e dai tasti della croce). */
-  const vaiA = (pos: number) => eseguiComando(comandoScriviPosizione(ID, pos))
+  /** Porta un servo a una posizione (usata da Vai e dai tasti della croce).
+   *  Una posizione non ammessa viene segnalata nel log e non arriva sul bus. */
+  const vaiA = async (id: number, pos: number) => {
+    let comando: number[]
+    try {
+      comando = comandoScriviPosizione(id, pos)
+    } catch (e) {
+      aggiungi([{ testo: `Servo ${id}: ${(e as Error).message}`, errore: true }])
+      return
+    }
+    await eseguiComando(comando)
+  }
 
-  /** Finché il toggle è attivo e la linea è aperta, legge la temperatura ogni 0.5 s e la
-   *  scrive nel ref `ultima`. Se il servo non risponde il valore è null e viene scritto un
-   *  solo errore nel log. Il cleanup ferma il ciclo. */
+  /** Esegue `fn` tenendo `occupato` acceso (blocca i pulsanti), anche per operazioni lunghe. */
+  const conOccupato = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    setOccupato(true)
+    try { return await fn() } finally { setOccupato(false) }
+  }
+
+  /** Scrittura con conferma e attese brevi, per le traiettorie: true se il servo ha risposto. */
+  const scrivi = (id: number, pos: number) => scriviPosizione(bus, id, pos)
+
+  /** Una lettura di posizione, per chi deve sapere dove si trova un servo. */
+  const leggi = (id: number) => leggiPosizione(bus, id)
+
+  /** Finché il toggle è attivo e la linea è aperta, legge la temperatura di un servo alla volta
+   *  (a turno, per non saturare il bus) con periodo di 0.5 s per servo, e la scrive nel ref
+   *  `ultima`. Se un servo non risponde il suo valore è null e viene scritto un solo errore
+   *  nel log. Il cleanup ferma il ciclo. */
   useEffect(() => {
     if (!tempAttiva || !aperta) return
     let annullato = false
-    let erroreNotificato = false
+    const erroreNotificato = new Set<number>()
 
     ;(async () => {
       while (!annullato) {
         const inizio = Date.now()
-        try {
-          const temp = await leggiTemperatura(bus, ID)
+        for (const id of SERVI) {
           if (annullato) break
-          if (temp !== null) {
-            ultima.current.temp = temp
-            erroreNotificato = false
-          } else {
-            ultima.current.temp = null
-            if (!erroreNotificato) {
-              aggiungi([{ testo: 'Temperatura: nessuna risposta valida', errore: true }])
-              erroreNotificato = true
+          try {
+            const temp = await leggiTemperatura(bus, id)
+            if (annullato) break
+            if (temp !== null) {
+              ultima.current[id].temp = temp
+              erroreNotificato.delete(id)
+            } else {
+              ultima.current[id].temp = null
+              if (!erroreNotificato.has(id)) {
+                aggiungi([{ testo: `Servo ${id}, temperatura: nessuna risposta valida`, errore: true }])
+                erroreNotificato.add(id)
+              }
+            }
+          } catch (e) {
+            if (annullato) break
+            ultima.current[id].temp = null
+            if (!erroreNotificato.has(id)) {
+              aggiungi([{ testo: `Servo ${id}, temperatura, errore: ${String(e)}`, errore: true }])
+              erroreNotificato.add(id)
             }
           }
-        } catch (e) {
-          if (annullato) break
-          ultima.current.temp = null
-          if (!erroreNotificato) {
-            aggiungi([{ testo: 'Temperatura, errore: ' + String(e), errore: true }])
-            erroreNotificato = true
-          }
         }
-        // mantiene il periodo di 500 ms tra una lettura e l'altra
+        // mantiene il periodo di 500 ms tra un giro completo e il successivo
         const resto = 500 - (Date.now() - inizio)
         if (resto > 0) await pausa(resto)
       }
     })()
 
-    return () => { annullato = true; ultima.current.temp = null }
+    return () => {
+      annullato = true
+      for (const id of SERVI) ultima.current[id].temp = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tempAttiva, aperta])
 
@@ -194,7 +227,10 @@ export function useServo() {
    *  Se il valore non è cambiato lo stato resta lo stesso e React non ridisegna. */
   useEffect(() => {
     const t = setInterval(() => {
-      setTelemetria(prev => prev.temp === ultima.current.temp ? prev : { ...ultima.current })
+      setTelemetria(prev =>
+        SERVI.every(id => prev[id].temp === ultima.current[id].temp)
+          ? prev
+          : Object.fromEntries(SERVI.map(id => [id, { ...ultima.current[id] }])))
     }, 200)
     return () => clearInterval(t)
   }, [])
@@ -202,6 +238,7 @@ export function useServo() {
   return {
     aperta, occupato, tempAttiva, telemetria, log,
     apri, chiudi, ping, eseguiComando, vaiA, aggiungi,
+    attendiPosizione, conOccupato, scrivi, leggi,
     commutaTemperatura: () => setTempAttiva(t => !t),
     svuotaLog: () => setLog([]),
   }

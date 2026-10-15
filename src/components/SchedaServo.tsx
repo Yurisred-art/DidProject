@@ -1,17 +1,18 @@
 // SchedaServo.tsx: presentazione e comandi. Non conosce il protocollo: usa solo ciò che
-// espone useServo.
+// espone useServo. Struttura di prima; le parti che dipendono dal servo si ripetono per ogni ID.
 
 import { useState } from 'react'
 import type { ServoApi } from '../hooks/useServo'
 import { POS_MAX } from '../driver/sts3215'
+import { SERVI } from '../config'
 
 // posizioni prefissate della croce (0 = giù, 4096 = giro intero)
 const POS = { giu: 0, sinistra: 1024, su: 2048, destra: 3072 }
 
-export function SchedaServo({ servo }: { servo: ServoApi }) {
+export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto?: boolean }) {
   const { aperta, occupato, tempAttiva, telemetria, log, aggiungi } = servo
   const [testo, setTesto] = useState('')               // campo esadecimale
-  const [decimale, setDecimale] = useState('')         // campo posizione decimale
+  const [decimale, setDecimale] = useState<Record<number, string>>({})   // campo posizione, per servo
 
   /** Converte il campo esadecimale in byte (spazi, virgole o "0x" ammessi) e li invia. */
   const invia = () => {
@@ -31,18 +32,18 @@ export function SchedaServo({ servo }: { servo: ServoApi }) {
     servo.eseguiComando(daInviare)
   }
 
-  /** Controlla il valore decimale (0-4095) e porta il servo in quella posizione. */
-  const vai = () => {
-    const v = decimale.trim()
+  /** Controlla il valore decimale (0-4095) e porta il servo `id` in quella posizione. */
+  const vai = (id: number) => {
+    const v = (decimale[id] ?? '').trim()
     if (!/^\d+$/.test(v) || Number(v) > POS_MAX) {
       aggiungi([{ testo: `Errore: inserisci un intero tra 0 e ${POS_MAX}`, errore: true }])
       return
     }
-    servo.vaiA(Number(v))
+    servo.vaiA(id, Number(v))
   }
 
-  // i controlli sono disabilitati a linea chiusa o mentre un comando è in corso
-  const bloccato = !aperta || occupato
+  // i controlli sono disabilitati a linea chiusa, durante un comando o durante una traiettoria
+  const bloccato = !aperta || occupato || inMoto
 
   return (
     <>
@@ -51,11 +52,13 @@ export function SchedaServo({ servo }: { servo: ServoApi }) {
         <button onClick={servo.apri} disabled={aperta}>Apri linea</button>
         <button onClick={servo.chiudi} disabled={!aperta || occupato}>Chiudi linea</button>
         <span>Linea: {aperta ? 'aperta' : 'chiusa'}</span>
+        <button onClick={servo.commutaTemperatura} disabled={!aperta}>
+          Temperatura: {tempAttiva ? 'ON' : 'OFF'}
+        </button>
       </div>
 
-      {/* riga 2: ping, invio byte esadecimali, svuota log */}
+      {/* riga 2: invio byte esadecimali, svuota log */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <button onClick={servo.ping} disabled={bloccato}>Ping</button>
         <input
           value={testo}
           onChange={e => setTesto(e.target.value)}
@@ -67,43 +70,46 @@ export function SchedaServo({ servo }: { servo: ServoApi }) {
         <button onClick={servo.svuotaLog}>Clear</button>
       </div>
 
-      {/* riga 3: posizione in decimale */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <input
-          value={decimale}
-          onChange={e => setDecimale(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && !bloccato && vai()}
-          placeholder={`Posizione (0-${POS_MAX})`}
-          style={{ width: 150, fontFamily: 'monospace' }}
-          disabled={bloccato}
-        />
-        <button onClick={vai} disabled={bloccato}>Vai</button>
-      </div>
+      {/* un blocco per ogni servo: ping, posizione, temperatura, croce */}
+      {SERVI.map(id => {
+        const temp = telemetria[id]?.temp ?? null
+        return (
+          <fieldset key={id} style={{ marginBottom: 12, textAlign: 'left' }}>
+            <legend>Servo {id}</legend>
 
-      {/* riga 4: toggle temperatura */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button onClick={servo.commutaTemperatura} disabled={!aperta}>
-          Temperatura: {tempAttiva ? 'ON' : 'OFF'}
-        </button>
-        <span style={{ fontFamily: 'monospace' }}>
-          {telemetria.temp !== null ? `${telemetria.temp}°` : '--°'}
-        </span>
-      </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <button onClick={() => servo.ping(id)} disabled={bloccato}>Ping</button>
+              <input
+                value={decimale[id] ?? ''}
+                onChange={e => setDecimale(d => ({ ...d, [id]: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && !bloccato && vai(id)}
+                placeholder={`Posizione (0-${POS_MAX})`}
+                style={{ width: 150, fontFamily: 'monospace' }}
+                disabled={bloccato}
+              />
+              <button onClick={() => vai(id)} disabled={bloccato}>Vai</button>
+              <span style={{ fontFamily: 'monospace' }}>
+                {temp !== null ? `${temp}°` : '--°'}
+              </span>
+            </div>
 
-      {/* croce direzionale: posizioni prefissate */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(3, 64px)', gridTemplateRows: 'repeat(3, 48px)',
-        gap: 6, marginTop: 16, alignItems: 'center', justifyItems: 'center',
-      }}>
-        <button style={{ gridColumn: 2, gridRow: 1 }} title={`Posizione ${POS.su}`}
-          onClick={() => servo.vaiA(POS.su)} disabled={bloccato}>▲</button>
-        <button style={{ gridColumn: 1, gridRow: 2 }} title={`Posizione ${POS.sinistra}`}
-          onClick={() => servo.vaiA(POS.sinistra)} disabled={bloccato}>◀</button>
-        <button style={{ gridColumn: 3, gridRow: 2 }} title={`Posizione ${POS.destra}`}
-          onClick={() => servo.vaiA(POS.destra)} disabled={bloccato}>▶</button>
-        <button style={{ gridColumn: 2, gridRow: 3 }} title={`Posizione ${POS.giu}`}
-          onClick={() => servo.vaiA(POS.giu)} disabled={bloccato}>▼</button>
-      </div>
+            {/* croce direzionale: posizioni prefissate */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(3, 64px)', gridTemplateRows: 'repeat(3, 48px)',
+              gap: 6, alignItems: 'center', justifyItems: 'center',
+            }}>
+              <button style={{ gridColumn: 2, gridRow: 1 }} title={`Posizione ${POS.su}`}
+                onClick={() => servo.vaiA(id, POS.su)} disabled={bloccato}>▲</button>
+              <button style={{ gridColumn: 1, gridRow: 2 }} title={`Posizione ${POS.sinistra}`}
+                onClick={() => servo.vaiA(id, POS.sinistra)} disabled={bloccato}>◀</button>
+              <button style={{ gridColumn: 3, gridRow: 2 }} title={`Posizione ${POS.destra}`}
+                onClick={() => servo.vaiA(id, POS.destra)} disabled={bloccato}>▶</button>
+              <button style={{ gridColumn: 2, gridRow: 3 }} title={`Posizione ${POS.giu}`}
+                onClick={() => servo.vaiA(id, POS.giu)} disabled={bloccato}>▼</button>
+            </div>
+          </fieldset>
+        )
+      })}
 
       {/* log in colonna a sinistra, più recente in alto; gli errori sono in rosso */}
       <div style={{ marginTop: 16, textAlign: 'left', fontFamily: 'monospace' }}>

@@ -30,9 +30,14 @@ export const comandoPing = (id: number) => costruisci(id, ISTR.PING, [])
 export const comandoLeggiPosizione = (id: number) =>
   costruisci(id, ISTR.LETTURA, [REG_POSIZIONE_CORRENTE, 0x02])
 
-/** WRITE della posizione obiettivo all'indirizzo 0x2A, byte meno significativo per primo. */
-export const comandoScriviPosizione = (id: number, pos: number) =>
-  costruisci(id, ISTR.SCRITTURA, [REG_POSIZIONE_OBIETTIVO, pos & 0xFF, pos >> 8])
+/** WRITE della posizione obiettivo all'indirizzo 0x2A, byte meno significativo per primo.
+ *  Un valore non intero, NaN o fuori da 0..POS_MAX non arriva mai sul bus (NaN & 0xFF vale 0:
+ *  il servo andrebbe in una posizione sbagliata senza segnalare nulla). */
+export const comandoScriviPosizione = (id: number, pos: number) => {
+  if (!Number.isInteger(pos) || pos < 0 || pos > POS_MAX)
+    throw new RangeError(`Posizione non valida: ${pos} (ammesso un intero da 0 a ${POS_MAX})`)
+  return costruisci(id, ISTR.SCRITTURA, [REG_POSIZIONE_OBIETTIVO, pos & 0xFF, pos >> 8])
+}
 
 /** READ di 1 byte all'indirizzo 0x3F (temperatura interna): FF FF 01 04 02 3F 01 B8 */
 export const comandoLeggiTemperatura = (id: number) =>
@@ -55,6 +60,16 @@ export const leggiPosizione = async (bus: Bus, id: number): Promise<number | nul
   const r = [...pacchetti].reverse().find(p =>
     p.ok && !p.eco && p.bytes.length === 8 && p.bytes[2] === id)
   return r ? posizioneDa(r) : null
+}
+
+// ---------- scrittura con conferma ----------
+
+/** Scrive la posizione obiettivo e aspetta la conferma del servo, con attese brevi: serve alle
+ *  traiettorie, dove ogni scambio deve stare nel passo di 20 ms. Restituisce true se è arrivata
+ *  una risposta valida da quel servo. Lancia RangeError se la posizione non è ammessa. */
+export const scriviPosizione = async (bus: Bus, id: number, pos: number): Promise<boolean> => {
+  const pacchetti = await bus.scambia(comandoScriviPosizione(id, pos), 30, 5)
+  return pacchetti.some(p => p.ok && !p.eco && p.bytes[2] === id)
 }
 
 /** Legge la temperatura. Restituisce null se non arriva una risposta valida. */
