@@ -12,4 +12,8 @@ export const GOMITO = +1
 
 /** Posizione in passi che corrisponde all'angolo 0 di ciascun giunto.
  *  PROVVISORI: vanno misurati con la dima (braccia allineate lungo x). */
-export const OFFSET: Record<number, number> = { 1: 2048, 2: 2048 }
+export const OFFSET: Record<number, number> = { 1: 2048, 2: 0 }
+
+/** Verso di rotazione di ciascun giunto: +1 se aumentando i passi il giunto gira in senso
+ *  antiorario (positivo), -1 se gira in senso orario (servo montato al contrario). */
+export const SEGNO: Record<number, number> = { 1: -1, 2: +1 }

@@ -27,6 +27,12 @@ test('con un offset diverso lo zero si sposta', () => {
   expect(aPassi(0, 1000)).toBe(1000)
 })
 
+test('con segno -1 il verso si inverte: 3072 passi diventano -90° e il ritorno torna ai passi', () => {
+  expect(aRadianti(3072, 2048, -1)).toBeCloseTo(-Math.PI / 2, 4)
+  expect(aPassi(Math.PI / 2, 2048, -1)).toBe(1024)
+  expect(aPassi(aRadianti(1500, 2048, -1), 2048, -1)).toBe(1500)
+})
+
 test('50 passi sono circa 4,4°', () => {
   expect(aGradi(aRadianti(2048 + 50))).toBeCloseTo(4.395, 2)
 })

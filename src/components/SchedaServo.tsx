@@ -13,6 +13,8 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
   const { aperta, occupato, tempAttiva, telemetria, log, aggiungi } = servo
   const [testo, setTesto] = useState('')               // campo esadecimale
   const [decimale, setDecimale] = useState<Record<number, string>>({})   // campo posizione, per servo
+  const [idAttuale, setIdAttuale] = useState('1')      // cambio ID: quello che il servo ha ora
+  const [idNuovo, setIdNuovo] = useState('2')          // cambio ID: quello da assegnare
 
   /** Converte il campo esadecimale in byte (spazi, virgole o "0x" ammessi) e li invia. */
   const invia = () => {
@@ -42,6 +44,19 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
     servo.vaiA(id, Number(v))
   }
 
+  /** Cambia l'ID dopo una conferma esplicita: scrive in memoria permanente nel servo. */
+  const cambiaId = () => {
+    const a = idAttuale.trim(), n = idNuovo.trim()
+    if (!/^\d+$/.test(a) || !/^\d+$/.test(n)) {
+      aggiungi([{ testo: 'Errore: gli ID devono essere numeri interi', errore: true }])
+      return
+    }
+    if (!window.confirm(
+      `Cambiare l'ID del servo da ${a} a ${n}?\n\n` +
+      'Deve essere collegato UN SOLO servo al bus: l\'ID viene scritto nella memoria permanente del servo.')) return
+    servo.cambiaId(Number(a), Number(n))
+  }
+
   // i controlli sono disabilitati a linea chiusa, durante un comando o durante una traiettoria
   const bloccato = !aperta || occupato || inMoto
 
@@ -69,6 +84,18 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
         <button onClick={invia} disabled={bloccato}>Invia</button>
         <button onClick={servo.svuotaLog}>Clear</button>
       </div>
+
+      {/* cambio ID: solo con un servo collegato al bus */}
+      <fieldset style={{ marginBottom: 12, textAlign: 'left' }}>
+        <legend>Cambia ID (un solo servo sul bus)</legend>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          ID attuale <input value={idAttuale} onChange={e => setIdAttuale(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
+          nuovo <input value={idNuovo} onChange={e => setIdNuovo(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
+          <button onClick={cambiaId} disabled={bloccato}>Cambia ID</button>
+        </div>
+      </fieldset>
 
       {/* un blocco per ogni servo: ping, posizione, temperatura, croce */}
       {SERVI.map(id => {

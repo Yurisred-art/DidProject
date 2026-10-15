@@ -10,6 +10,9 @@ export const POS_MAX = 4095
 export const ISTR = { PING: 0x01, LETTURA: 0x02, SCRITTURA: 0x03 } as const
 export const ID_DIFFUSIONE = 0xFE
 
+export const REG_ID = 0x05                   // 5, 1 byte, in memoria permanente (EEPROM)
+export const REG_BLOCCO_EEPROM = 0x37        // 55, 1 byte: 0 = scrittura EEPROM consentita, 1 = bloccata
+export const ID_MAX = 253                    // 254 (0xFE) è l'ID di diffusione, 255 non è usabile
 export const REG_POSIZIONE_OBIETTIVO = 0x2A  // 42, 2 byte, little-endian
 export const REG_POSIZIONE_CORRENTE = 0x38   // 56, 2 byte, little-endian
 export const REG_TEMPERATURA = 0x3F          // 63, 1 byte
@@ -70,6 +73,60 @@ export const leggiPosizione = async (bus: Bus, id: number): Promise<number | nul
 export const scriviPosizione = async (bus: Bus, id: number, pos: number): Promise<boolean> => {
   const pacchetti = await bus.scambia(comandoScriviPosizione(id, pos), 30, 5)
   return pacchetti.some(p => p.ok && !p.eco && p.bytes[2] === id)
+}
+
+// ---------- cambio dell'ID ----------
+
+/** WRITE di un byte in un registro: FF FF ID 04 03 REG VALORE CHK. */
+export const comandoScriviByte = (id: number, registro: number, valore: number) =>
+  costruisci(id, ISTR.SCRITTURA, [registro, valore])
+
+const pausa = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+const haRisposto = (pacchetti: Pacchetto[], id: number) =>
+  pacchetti.some(p => p.ok && !p.eco && p.bytes[2] === id)
+
+/** true se un servo risponde al ping con questo ID. */
+export const rispondeAlPing = async (bus: Bus, id: number): Promise<boolean> =>
+  haRisposto(await bus.scambia(comandoPing(id), 150, 20), id)
+
+/** Cambia l'ID di un servo. Da usare con UN SOLO servo collegato al bus.
+ *  Sequenza: ping dell'ID attuale (deve rispondere), ping del nuovo (non deve rispondere),
+ *  sblocco della EEPROM, scrittura dell'ID, ping del nuovo ID per verificare, riblocco.
+ *  Restituisce l'esito e un messaggio da mostrare. */
+export const cambiaId = async (bus: Bus, attuale: number, nuovo: number)
+  : Promise<{ ok: boolean; messaggio: string }> => {
+  const valido = (n: number) => Number.isInteger(n) && n >= 0 && n <= ID_MAX
+  if (!valido(attuale) || !valido(nuovo))
+    return { ok: false, messaggio: `ID non valido: ammessi interi da 0 a ${ID_MAX}` }
+  if (attuale === nuovo)
+    return { ok: false, messaggio: 'L\'ID nuovo coincide con quello attuale' }
+
+  if (!(await rispondeAlPing(bus, attuale)))
+    return { ok: false, messaggio: `Nessun servo risponde all'ID ${attuale}` }
+  if (await rispondeAlPing(bus, nuovo))
+    return { ok: false, messaggio: `Un servo risponde già all'ID ${nuovo}: scollega gli altri servo o scegli un altro ID` }
+
+  // 1. sblocca la scrittura in EEPROM
+  const sbloccato = haRisposto(await bus.scambia(comandoScriviByte(attuale, REG_BLOCCO_EEPROM, 0), 300, 50), attuale)
+  if (!sbloccato)
+    return { ok: false, messaggio: 'Il servo non ha confermato lo sblocco della EEPROM: ID non cambiato' }
+
+  // 2. scrive il nuovo ID (il servo può rispondere con il vecchio o con il nuovo: non conta)
+  await bus.scambia(comandoScriviByte(attuale, REG_ID, nuovo), 300, 50)
+  await pausa(50)
+
+  // 3. verifica: ora deve rispondere il nuovo ID
+  if (!(await rispondeAlPing(bus, nuovo)))
+    return { ok: false, messaggio: `Dopo la scrittura nessun servo risponde all'ID ${nuovo}: ID non cambiato` }
+
+  // 4. riblocca la EEPROM, ora con il nuovo ID
+  const bloccato = haRisposto(await bus.scambia(comandoScriviByte(nuovo, REG_BLOCCO_EEPROM, 1), 300, 50), nuovo)
+  return {
+    ok: true,
+    messaggio: `ID cambiato da ${attuale} a ${nuovo}` +
+      (bloccato ? '' : ' (la EEPROM non ha confermato il riblocco: riaccendere il servo)'),
+  }
 }
 
 /** Legge la temperatura. Restituisce null se non arriva una risposta valida. */

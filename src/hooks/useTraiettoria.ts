@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ServoApi } from './useServo'
 import { POS_MAX } from '../driver/sts3215'
-import { SERVI, OFFSET } from '../config'
+import { SERVI, OFFSET, SEGNO } from '../config'
 import { aPassi, aRadianti, aGradi } from '../lib/conversioni'
 import { inversa, puntaX, puntaY, type Angoli } from '../lib/cinematica'
 import {
@@ -20,7 +20,7 @@ const SALTO_MAX = 2048         // mezzo giro in un solo campione: discontinuità
 const [ID1, ID2] = SERVI
 
 /** Angoli -> passi dei due servo. */
-const passiDi = (a: Angoli) => [aPassi(a.t1, OFFSET[ID1]), aPassi(a.t2, OFFSET[ID2])]
+const passiDi = (a: Angoli) => [aPassi(a.t1, OFFSET[ID1], SEGNO[ID1]), aPassi(a.t2, OFFSET[ID2], SEGNO[ID2])]
 
 export function useTraiettoria(servo: ServoApi) {
   const [inMoto, setInMoto] = useState(false)
@@ -58,8 +58,8 @@ export function useTraiettoria(servo: ServoApi) {
 
   /** Posizione della punta ricavata dalle posizioni lette (cinematica diretta). */
   const puntaDa = (pos1: number, pos2: number) => {
-    const t1 = aRadianti(pos1, OFFSET[ID1])
-    const t2 = aRadianti(pos2, OFFSET[ID2])
+    const t1 = aRadianti(pos1, OFFSET[ID1], SEGNO[ID1])
+    const t2 = aRadianti(pos2, OFFSET[ID2], SEGNO[ID2])
     return { x: puntaX(t1, t2), y: puntaY(t1, t2) }
   }
 

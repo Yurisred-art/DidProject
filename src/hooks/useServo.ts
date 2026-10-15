@@ -7,7 +7,8 @@ import { WebSerial } from '../driver/webSerial'
 import type { Pacchetto } from '../driver/analizzatore'
 import {
   ID_DIFFUSIONE, ISTR, REG_POSIZIONE_OBIETTIVO,
-  comandoPing, comandoScriviPosizione, leggiPosizione, leggiTemperatura, scriviPosizione,
+  cambiaId as cambiaIdServo, comandoPing, comandoScriviPosizione, leggiPosizione, leggiTemperatura,
+  scriviPosizione,
 } from '../driver/sts3215'
 import { SERVI } from '../config'
 
@@ -168,6 +169,21 @@ export function useServo() {
     try { return await fn() } finally { setOccupato(false) }
   }
 
+  /** Cambia l'ID di un servo (con un solo servo sul bus) e scrive l'esito nel log.
+   *  Ferma prima la lettura della temperatura, che altrimenti si intromette fra i passaggi. */
+  const cambiaId = async (attuale: number, nuovo: number) => {
+    setTempAttiva(false)
+    await conOccupato(async () => {
+      try {
+        const { ok, messaggio } = await cambiaIdServo(bus, attuale, nuovo)
+        aggiungi([{ testo: messaggio, errore: !ok }])
+        if (ok) aggiungi([{ testo: 'Se serve, aggiungi il nuovo ID a SERVI in config.ts' }])
+      } catch (e) {
+        aggiungi([{ testo: 'Errore: ' + String(e), errore: true }])
+      }
+    })
+  }
+
   /** Scrittura con conferma e attese brevi, per le traiettorie: true se il servo ha risposto. */
   const scrivi = (id: number, pos: number) => scriviPosizione(bus, id, pos)
 
@@ -238,7 +254,7 @@ export function useServo() {
   return {
     aperta, occupato, tempAttiva, telemetria, log,
     apri, chiudi, ping, eseguiComando, vaiA, aggiungi,
-    attendiPosizione, conOccupato, scrivi, leggi,
+    attendiPosizione, conOccupato, scrivi, leggi, cambiaId,
     commutaTemperatura: () => setTempAttiva(t => !t),
     svuotaLog: () => setLog([]),
   }
