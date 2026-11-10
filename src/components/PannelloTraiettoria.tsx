@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useTraiettoria } from '../hooks/useTraiettoria'
 import { velocitaCerchio } from '../lib/traiettoria'
+import { MappaArea } from './MappaArea'
 
 const num = (s: string) => (s.trim() === '' ? NaN : Number(s))
 const campo = { width: 70, fontFamily: 'monospace' } as const
@@ -21,7 +22,7 @@ export function PannelloTraiettoria({ bloccato, inMoto, vaiAlPunto, tracciaCerch
   const vel = r > 0 && d > 0 ? velocitaCerchio(r, d) : null
 
   return (
-    <fieldset style={{ marginBottom: 12, textAlign: 'left' }}>
+    <fieldset style={{ marginBottom: 12, marginTop: 50, textAlign: 'left' }}>
       <legend>Traiettoria (mm)</legend>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -45,6 +46,7 @@ export function PannelloTraiettoria({ bloccato, inMoto, vaiAlPunto, tracciaCerch
           velocità media {vel.media.toFixed(0)} mm/s, di picco {vel.picco.toFixed(0)} mm/s
         </div>
       )}
+      <MappaArea cx={num(cx)} cy={num(cy)} raggio={r} x={num(x)} y={num(y)} />
     </fieldset>
   )
 }

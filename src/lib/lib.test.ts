@@ -137,3 +137,20 @@ test('percorso interamente raggiungibile -> null; con un tratto fuori -> il punt
   const fuori = primoPuntoNonRaggiungibile(cerchio(300, 0, 100))!
   expect(Math.hypot(fuori.x, fuori.y) > L1 + L2).toBe(true)
 })
+
+// ---------- giunti e limiti ----------
+
+import { dentroLimiti, esitoPunto, passiDi } from './giunti'
+
+test('giunti: con offset 2048/0 e segno -1/+1 il punto (350, 0) sta negli offset', () => {
+  const a = inversa(L1 + L2, 0)!
+  const [p1, p2] = passiDi(a)
+  expect(Math.abs(p1 - 2048) <= 1).toBe(true)
+  expect(Math.abs(p2 - 2048) <= 1).toBe(true)     // l'offset del servo 2 nel config dello zip è 2048
+})
+
+test('giunti: limiti larghi accettano ogni posizione, punti fuori area sono segnalati', () => {
+  expect(dentroLimiti([0, 4095])).toBe(true)
+  expect(esitoPunto(100, 0)).toBe('ok')
+  expect(esitoPunto(400, 0)).toBe('fuori-area')
+})

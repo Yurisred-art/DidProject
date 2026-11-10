@@ -10,7 +10,7 @@ import {
   cambiaId as cambiaIdServo, comandoPing, comandoScriviPosizione, leggiPosizione, leggiTemperatura,
   scriviPosizione,
 } from '../driver/sts3215'
-import { SERVI } from '../config'
+import { SERVI, LIMITI } from '../config'
 
 /** Formatta un array di byte in esadecimale: [255, 1] -> "0xFF 0x01" */
 const hex = (b: number[]) =>
@@ -153,6 +153,11 @@ export function useServo() {
   /** Porta un servo a una posizione (usata da Vai e dai tasti della croce).
    *  Una posizione non ammessa viene segnalata nel log e non arriva sul bus. */
   const vaiA = async (id: number, pos: number) => {
+    const lim = LIMITI[id]
+    if (lim && (pos < lim[0] || pos > lim[1])) {
+      aggiungi([{ testo: `Servo ${id}: posizione ${pos} fuori dai limiti (${lim[0]}..${lim[1]}) di config.ts`, errore: true }])
+      return
+    }
     let comando: number[]
     try {
       comando = comandoScriviPosizione(id, pos)

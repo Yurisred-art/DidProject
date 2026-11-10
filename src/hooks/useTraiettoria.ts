@@ -4,9 +4,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { ServoApi } from './useServo'
-import { POS_MAX } from '../driver/sts3215'
-import { SERVI, OFFSET, SEGNO } from '../config'
-import { aPassi, aRadianti, aGradi } from '../lib/conversioni'
+import { SERVI, OFFSET, SEGNO, LIMITI } from '../config'
+import { aRadianti, aGradi } from '../lib/conversioni'
+import { passiDi, dentroLimiti } from '../lib/giunti'
 import { inversa, puntaX, puntaY, type Angoli } from '../lib/cinematica'
 import {
   cerchio, raccordo, primoPuntoNonRaggiungibile, velocitaCerchio,
@@ -19,8 +19,6 @@ const SALTO_MAX = 2048         // mezzo giro in un solo campione: discontinuità
 
 const [ID1, ID2] = SERVI
 
-/** Angoli -> passi dei due servo. */
-const passiDi = (a: Angoli) => [aPassi(a.t1, OFFSET[ID1], SEGNO[ID1]), aPassi(a.t2, OFFSET[ID2], SEGNO[ID2])]
 
 export function useTraiettoria(servo: ServoApi) {
   const [inMoto, setInMoto] = useState(false)
@@ -70,8 +68,9 @@ export function useTraiettoria(servo: ServoApi) {
     const a = inversa(x, y)
     if (!a) return log(`Punto (${x}, ${y}) fuori dall'area raggiungibile`, true)
     const [p1, p2] = passiDi(a)
-    if (p1 < 0 || p1 > POS_MAX || p2 < 0 || p2 > POS_MAX)
-      return log(`Punto (${x}, ${y}): posizioni ${p1} e ${p2} fuori scala (0..${POS_MAX}), controllare gli offset`, true)
+    if (!dentroLimiti([p1, p2]))
+      return log(`Punto (${x}, ${y}): posizioni ${p1} e ${p2} fuori dai limiti dei servo ` +
+        `(${ID1}: ${LIMITI[ID1][0]}..${LIMITI[ID1][1]}, ${ID2}: ${LIMITI[ID2][0]}..${LIMITI[ID2][1]})`, true)
 
     await servo.conOccupato(async () => {
       log(`Obiettivo (${x}, ${y}) mm: θ1 = ${aGradi(a.t1).toFixed(1)}°, θ2 = ${aGradi(a.t2).toFixed(1)}°`)
@@ -102,8 +101,9 @@ export function useTraiettoria(servo: ServoApi) {
     for (let i = 0; i <= campioni; i++) {
       const p = percorso(i / campioni)
       const passi = passiDi(inversa(p.x, p.y)!)
-      if (passi.some(v => v < 0 || v > POS_MAX))
-        return `Il percorso richiede posizioni fuori scala (${passi.join(', ')}): controllare gli offset`
+      if (!dentroLimiti(passi))
+        return `Il percorso richiede posizioni fuori dai limiti dei servo (${passi.join(', ')}): ` +
+          'controllare gli offset e i limiti in config.ts'
       if (prec && passi.some((v, k) => Math.abs(v - prec![k]) > SALTO_MAX))
         return 'Il percorso attraversa una discontinuità degli angoli'
       prec = passi
@@ -139,6 +139,8 @@ export function useTraiettoria(servo: ServoApi) {
       const inizio = performance.now()
       let inVolo = false     // uno scambio è ancora in corso: il tick viene saltato, non accodato
       let fallite = 0
+      let inviati = 0        // passi effettivamente scritti sui servo
+      let saltati = 0        // tick persi perché lo scambio precedente non era finito
 
       const interrompi = (motivo: string) => {
         if (corsa.current !== questa) return
@@ -151,7 +153,12 @@ export function useTraiettoria(servo: ServoApi) {
         try {
           const pf = percorso(1)                       // punto finale esatto
           await inviaAngoli(inversa(pf.x, pf.y)!)
-          if (corsa.current === questa) log('Circonferenza completata')
+          if (corsa.current === questa) {
+            log('Circonferenza completata')
+            // quanti punti sono stati davvero inviati: con pochi punti la curva diventa un poligono
+            log(`Passi inviati ${inviati}, tick saltati ${saltati}, periodo medio ` +
+              `${(inviati > 0 ? (performance.now() - inizio) / inviati : 0).toFixed(0)} ms (obiettivo ${PERIODO_MS} ms)`)
+          }
         } catch (e) {
           log('Errore: ' + String(e), true)
         } finally {
@@ -160,7 +167,8 @@ export function useTraiettoria(servo: ServoApi) {
       }
 
       const passo = async () => {
-        if (corsa.current !== questa || inVolo) return
+        if (corsa.current !== questa) return
+        if (inVolo) { saltati++; return }
         const t = (performance.now() - inizio) / (durataS * 1000)
         if (t >= 1) return fine()
         const p = percorso(raccordo(t))
@@ -169,6 +177,7 @@ export function useTraiettoria(servo: ServoApi) {
         inVolo = true
         try {
           const ok = await inviaAngoli(a)
+          inviati++
           fallite = ok ? 0 : fallite + 1
           if (fallite >= FALLITE_MAX) interrompi('Servo senza conferma: traiettoria interrotta')
         } catch (e) {

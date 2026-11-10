@@ -63,7 +63,7 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
   return (
     <>
       {/* riga 1: gestione linea */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 20 }}>
         <button onClick={servo.apri} disabled={aperta}>Apri linea</button>
         <button onClick={servo.chiudi} disabled={!aperta || occupato}>Chiudi linea</button>
         <span>Linea: {aperta ? 'aperta' : 'chiusa'}</span>
@@ -71,6 +71,20 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
           Temperatura: {tempAttiva ? 'ON' : 'OFF'}
         </button>
       </div>
+
+
+      {/* cambio ID: solo con un servo collegato al bus */}
+      <fieldset style={{ marginBottom: 80, textAlign: 'left' }}>
+        <legend>Cambia ID (un solo servo sul bus)</legend>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          ID attuale <input value={idAttuale} onChange={e => setIdAttuale(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
+          nuovo <input value={idNuovo} onChange={e => setIdNuovo(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
+          <button onClick={cambiaId} disabled={bloccato}>Cambia ID</button>
+        </div>
+      </fieldset>
+
 
       {/* riga 2: invio byte esadecimali, svuota log */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -85,23 +99,13 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
         <button onClick={servo.svuotaLog}>Clear</button>
       </div>
 
-      {/* cambio ID: solo con un servo collegato al bus */}
-      <fieldset style={{ marginBottom: 12, textAlign: 'left' }}>
-        <legend>Cambia ID (un solo servo sul bus)</legend>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          ID attuale <input value={idAttuale} onChange={e => setIdAttuale(e.target.value)}
-            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
-          nuovo <input value={idNuovo} onChange={e => setIdNuovo(e.target.value)}
-            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
-          <button onClick={cambiaId} disabled={bloccato}>Cambia ID</button>
-        </div>
-      </fieldset>
-
+      
       {/* un blocco per ogni servo: ping, posizione, temperatura, croce */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 30, alignItems: 'flex-start' }}>
       {SERVI.map(id => {
         const temp = telemetria[id]?.temp ?? null
         return (
-          <fieldset key={id} style={{ marginBottom: 12, textAlign: 'left' }}>
+          <fieldset key={id} style={{ margin:0, textAlign: 'left' }}>
             <legend>Servo {id}</legend>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -123,7 +127,7 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
             {/* croce direzionale: posizioni prefissate */}
             <div style={{
               display: 'grid', gridTemplateColumns: 'repeat(3, 64px)', gridTemplateRows: 'repeat(3, 48px)',
-              gap: 6, alignItems: 'center', justifyItems: 'center',
+              gap: 2, alignItems: 'center', justifyItems: 'center',
             }}>
               <button style={{ gridColumn: 2, gridRow: 1 }} title={`Posizione ${POS.su}`}
                 onClick={() => servo.vaiA(id, POS.su)} disabled={bloccato}>▲</button>
@@ -135,8 +139,10 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
                 onClick={() => servo.vaiA(id, POS.giu)} disabled={bloccato}>▼</button>
             </div>
           </fieldset>
+          
         )
       })}
+      </div>
 
       {/* log in colonna a sinistra, più recente in alto; gli errori sono in rosso */}
       <div style={{ marginTop: 16, textAlign: 'left', fontFamily: 'monospace' }}>
