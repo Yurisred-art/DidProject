@@ -45,13 +45,11 @@ export function useTraiettoria(servo: ServoApi) {
   useEffect(() => () => { corsa.current++; fermaTimer() }, [])
   useEffect(() => { if (!servo.aperta) ferma() }, [servo.aperta])
 
-  /** Scrive gli angoli sui due servo e dice se entrambi hanno confermato.
-   *  Un valore non ammesso (NaN, fuori scala) fa lanciare RangeError dal driver. */
+  /** Scrive gli angoli sui due servo con un solo SYNC WRITE (partono insieme) e dice se la scheda
+   *  l'ha accettato. Un valore non ammesso (NaN, fuori scala) fa lanciare RangeError dal driver. */
   const inviaAngoli = async (a: Angoli) => {
     const [p1, p2] = passiDi(a)
-    const ok1 = await servoRef.current.scrivi(ID1, p1)
-    const ok2 = await servoRef.current.scrivi(ID2, p2)
-    return ok1 && ok2
+    return servoRef.current.scriviMolti([{ id: ID1, pos: p1 }, { id: ID2, pos: p2 }])
   }
 
   /** Posizione della punta ricavata dalle posizioni lette (cinematica diretta). */
@@ -76,7 +74,7 @@ export function useTraiettoria(servo: ServoApi) {
       log(`Obiettivo (${x}, ${y}) mm: θ1 = ${aGradi(a.t1).toFixed(1)}°, θ2 = ${aGradi(a.t2).toFixed(1)}°`)
       try {
         const ok = await inviaAngoli(a)
-        if (!ok) log('Un servo non ha confermato la scrittura', true)
+        if (!ok) log('La scheda non ha confermato la scrittura', true)
         const [r1, r2] = await Promise.all([
           servo.attendiPosizione(ID1, p1),
           servo.attendiPosizione(ID2, p2),
@@ -179,7 +177,7 @@ export function useTraiettoria(servo: ServoApi) {
           const ok = await inviaAngoli(a)
           inviati++
           fallite = ok ? 0 : fallite + 1
-          if (fallite >= FALLITE_MAX) interrompi('Servo senza conferma: traiettoria interrotta')
+          if (fallite >= FALLITE_MAX) interrompi('Scheda senza conferma: traiettoria interrotta')
         } catch (e) {
           interrompi('Errore: ' + String(e))
         } finally {

@@ -48,7 +48,7 @@ export function MappaArea({ cx, cy, raggio, x, y }: Props) {
   const puntoValido = Number.isFinite(x) && Number.isFinite(y)
 
   return (
-    <div style={{ textAlign: 'left', marginTop: 20 }}>
+    <div style={{ textAlign: 'left', marginTop: 12 }}>
       <svg width={LATO} height={LATO} style={{ border: '1px solid #888', background: '#fff' }}>
         <path d={celle.ok} fill="#7bc47f" />
         <path d={celle.limiti} fill="#f0b25a" />
@@ -59,10 +59,10 @@ export function MappaArea({ cx, cy, raggio, x, y }: Props) {
         {cerchioValido && <path d={tracciato} fill="none" stroke={fuori ? '#d33' : '#1a4fd6'} strokeWidth={2} />}
         {puntoValido && <circle cx={px(x)} cy={py(y)} r={4} fill="#d33" />}
       </svg>
-      <div style={{ fontFamily: 'monospace', fontSize: 12 }}>
+      <div style={{ fontFamily: 'monospace', fontSize: 15, color: 'white' }}>
         verde = raggiungibile · arancione = dentro l'area ma fuori dai limiti dei servo · base al centro, x a destra, y in alto
         {cerchioValido && (fuori
-          ? <div style={{ color: 'red' }}>Cerchio: {fuori} punti su 121 fuori area o fuori limiti (verrà rifiutato)</div>
+          ? <div style={{ color: 'yellow' }}>Cerchio: {fuori} punti su 121 fuori area o fuori limiti (verrà rifiutato)</div>
           : <div>Cerchio: tutto raggiungibile</div>)}
       </div>
     </div>

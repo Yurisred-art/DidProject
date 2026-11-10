@@ -18,4 +18,6 @@ export const OFFSET: Record<number, number> = { 1: 2048, 2: 0 }
  *  antiorario (positivo), -1 se gira in senso orario (servo montato al contrario). */
 export const SEGNO: Record<number, number> = { 1: -1, 2: +1 }
 
+/** Passi minimo e massimo consentiti a ciascun servo, da misurare sul braccio (con un margine
+ *  prima dell'urto). Valori larghi = nessun limite. Valgono per Vai, croce, punto e cerchio. */
 export const LIMITI: Record<number, [number, number]> = { 1: [500, 2200], 2: [0, 1450] }

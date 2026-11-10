@@ -10,7 +10,7 @@ import { SERVI } from '../config'
 const POS = { giu: 0, sinistra: 1024, su: 2048, destra: 3072 }
 
 export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto?: boolean }) {
-  const { aperta, occupato, tempAttiva, telemetria, log, aggiungi } = servo
+  const { aperta, connessa, statoRete, occupato, tempAttiva, telemetria, log, aggiungi } = servo
   const [testo, setTesto] = useState('')               // campo esadecimale
   const [decimale, setDecimale] = useState<Record<number, string>>({})   // campo posizione, per servo
   const [idAttuale, setIdAttuale] = useState('1')      // cambio ID: quello che il servo ha ora
@@ -57,34 +57,24 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
     servo.cambiaId(Number(a), Number(n))
   }
 
-  // i controlli sono disabilitati a linea chiusa, durante un comando o durante una traiettoria
+  // i movimenti richiedono la linea aperta (scheda armata); durante un comando o una traiettoria no
   const bloccato = !aperta || occupato || inMoto
+  // ping, byte esadecimali e cambio ID funzionano anche a linea chiusa, basta il collegamento
+  const bloccatoLettura = !connessa || occupato || inMoto
 
   return (
     <>
       {/* riga 1: gestione linea */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 20 }}>
-        <button onClick={servo.apri} disabled={aperta}>Apri linea</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <button onClick={servo.apri} disabled={aperta || occupato || statoRete !== 'open'}>Apri linea</button>
         <button onClick={servo.chiudi} disabled={!aperta || occupato}>Chiudi linea</button>
         <span>Linea: {aperta ? 'aperta' : 'chiusa'}</span>
-        <button onClick={servo.commutaTemperatura} disabled={!aperta}>
+        <span>Wi-Fi: {statoRete}</span>
+        {statoRete === 'closed' && <button onClick={servo.riconnetti}>Riconnetti</button>}
+        <button onClick={servo.commutaTemperatura} disabled={!connessa}>
           Temperatura: {tempAttiva ? 'ON' : 'OFF'}
         </button>
       </div>
-
-
-      {/* cambio ID: solo con un servo collegato al bus */}
-      <fieldset style={{ marginBottom: 80, textAlign: 'left' }}>
-        <legend>Cambia ID (un solo servo sul bus)</legend>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          ID attuale <input value={idAttuale} onChange={e => setIdAttuale(e.target.value)}
-            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
-          nuovo <input value={idNuovo} onChange={e => setIdNuovo(e.target.value)}
-            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccato} />
-          <button onClick={cambiaId} disabled={bloccato}>Cambia ID</button>
-        </div>
-      </fieldset>
-
 
       {/* riga 2: invio byte esadecimali, svuota log */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -93,23 +83,34 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
           onChange={e => setTesto(e.target.value)}
           placeholder="FF FF 01 02 01 FB"
           style={{ width: 300, fontFamily: 'monospace' }}
-          disabled={bloccato}
+          disabled={bloccatoLettura}
         />
-        <button onClick={invia} disabled={bloccato}>Invia</button>
+        <button onClick={invia} disabled={bloccatoLettura}>Invia</button>
         <button onClick={servo.svuotaLog}>Clear</button>
       </div>
 
-      
+      {/* cambio ID: solo con un servo collegato al bus */}
+      <fieldset style={{ marginBottom: 12, textAlign: 'left' }}>
+        <legend>Cambia ID (un solo servo sul bus)</legend>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          ID attuale <input value={idAttuale} onChange={e => setIdAttuale(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccatoLettura} />
+          nuovo <input value={idNuovo} onChange={e => setIdNuovo(e.target.value)}
+            style={{ width: 60, fontFamily: 'monospace' }} disabled={bloccatoLettura} />
+          <button onClick={cambiaId} disabled={bloccatoLettura}>Cambia ID</button>
+        </div>
+      </fieldset>
+
       {/* un blocco per ogni servo: ping, posizione, temperatura, croce */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 30, alignItems: 'flex-start' }}>
       {SERVI.map(id => {
         const temp = telemetria[id]?.temp ?? null
         return (
-          <fieldset key={id} style={{ margin:0, textAlign: 'left' }}>
+          <fieldset key={id} style={{ marginBottom: 12, textAlign: 'left' }}>
             <legend>Servo {id}</legend>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <button onClick={() => servo.ping(id)} disabled={bloccato}>Ping</button>
+              <button onClick={() => servo.ping(id)} disabled={bloccatoLettura}>Ping</button>
               <input
                 value={decimale[id] ?? ''}
                 onChange={e => setDecimale(d => ({ ...d, [id]: e.target.value }))}
@@ -127,7 +128,7 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
             {/* croce direzionale: posizioni prefissate */}
             <div style={{
               display: 'grid', gridTemplateColumns: 'repeat(3, 64px)', gridTemplateRows: 'repeat(3, 48px)',
-              gap: 2, alignItems: 'center', justifyItems: 'center',
+              gap: 6, alignItems: 'center', justifyItems: 'center',
             }}>
               <button style={{ gridColumn: 2, gridRow: 1 }} title={`Posizione ${POS.su}`}
                 onClick={() => servo.vaiA(id, POS.su)} disabled={bloccato}>▲</button>
@@ -139,7 +140,6 @@ export function SchedaServo({ servo, inMoto = false }: { servo: ServoApi; inMoto
                 onClick={() => servo.vaiA(id, POS.giu)} disabled={bloccato}>▼</button>
             </div>
           </fieldset>
-          
         )
       })}
       </div>

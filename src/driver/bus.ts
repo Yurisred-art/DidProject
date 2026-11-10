@@ -1,104 +1,47 @@
-// bus.ts: una richiesta alla volta sul bus half-duplex, con l'analizzatore che ricostruisce
-// i pacchetti di risposta. Non conosce né React né il significato dei registri.
+// bus.ts: lo scambio con i servo attraverso la scheda Wi-Fi. Non conosce né React né il
+// significato dei registri: incapsula il pacchetto STS in un TXN e ne rilegge la REPLY.
 //
-// La lettura è nel trasporto, che consegna i byte a `suBlocco` per tutta la sessione.
-// Il bus tiene traccia della richiesta in attesa e la conclude quando arriva la risposta,
-// quando i byte smettono di arrivare o quando scade il tempo.
+// Prima il bus scriveva sulla seriale, aspettava il silenzio e scartava l'eco. Ora la scheda
+// esegue lo scambio sul bus dei servo e ci restituisce i byte letti in una REPLY, abbinata
+// alla richiesta dal numero di sequenza: niente eco, niente silenzio da misurare.
 
-import type { Trasporto } from './trasporto'
 import { Analizzatore, type Pacchetto } from './analizzatore'
+import { leggiReply, type Risposta } from './protocollo'
 
-/** Richiesta inviata e non ancora conclusa. */
-type InAttesa = {
-  richiesta: number[]    // byte inviati: servono a riconoscere l'eco
-  trovati: Pacchetto[]   // pacchetti ricevuti finora
-  fine: () => void       // conclude l'attesa
-  riarma: () => void     // da chiamare a ogni blocco: da qui in poi conta il silenzio
-}
+/** Spedisce un TXN con questo pacchetto STS e restituisce il payload della REPLY con lo stesso
+ *  seq, o null se non arriva entro `timeoutMs` (o il socket non è aperto). È txn() di useBus. */
+export type InviaTxn = (sts: Uint8Array, timeoutMs: number) => Promise<Uint8Array | null>
 
 export class Bus {
-  /** Chiamata per ogni risposta valida (non eco): serve a controllare il byte di stato. */
+  /** Chiamata per ogni risposta valida di un servo: serve a controllare il byte di stato. */
   suRisposta: (p: Pacchetto) => void = () => {}
 
-  private trasporto: Trasporto
-  private analizzatore = new Analizzatore()
-  private coda: Promise<unknown> = Promise.resolve()  // coda delle operazioni sulla seriale
-  private inAttesa: InAttesa | null = null
+  /** Chiamata per ogni REPLY ricevuta, con il suo status (0 ok, 1 limitato, altri = rifiuto). */
+  suEsito: (r: Risposta) => void = () => {}
 
-  constructor(trasporto: Trasporto) {
-    this.trasporto = trasporto
-    // il ciclo di lettura del trasporto consegna qui i byte, a mano a mano che arrivano
-    trasporto.suRicezione = blocco => this.suBlocco(blocco)
+  private inviaTxn: InviaTxn
+
+  constructor(inviaTxn: InviaTxn) {
+    this.inviaTxn = inviaTxn
   }
 
-  get aperta() {
-    return this.trasporto.aperta
+  /** Invia il pacchetto e restituisce la REPLY così com'è (null se si perde). Serve a chi non
+   *  si aspetta dati, come lo SYNC WRITE, ma vuole sapere se la scheda l'ha accettato. */
+  richiedi = async (daInviare: number[], timeoutMs = 1000): Promise<Risposta | null> => {
+    const payload = await this.inviaTxn(Uint8Array.from(daInviare), timeoutMs)
+    const risposta = payload ? leggiReply(payload) : null
+    if (risposta) this.suEsito(risposta)
+    return risposta
   }
 
-  /** Esegue una sola operazione alla volta sulla seriale: ogni chiamata parte
-   *  quando la precedente è finita. Evita sovrapposizioni fra Ping, Invia,
-   *  Vai, croce e polling della temperatura. */
-  serializza = <T>(fn: () => Promise<T>): Promise<T> => {
-    const r = this.coda.then(fn, fn)
-    this.coda = r.catch(() => {})
-    return r
+  /** Invia il pacchetto e restituisce i pacchetti di risposta dei servo, con l'esito del checksum.
+   *  Se la REPLY si perde o la scheda rifiuta la richiesta restituisce una lista vuota (il motivo
+   *  del rifiuto arriva a `suEsito`). La stessa firma di prima, con un solo tempo massimo. */
+  scambia = async (daInviare: number[], timeoutMs = 1000): Promise<Pacchetto[]> => {
+    const risposta = await this.richiedi(daInviare, timeoutMs)
+    if (!risposta || risposta.status > 1) return []
+    const pacchetti = new Analizzatore().ricevi(risposta.dati)
+    for (const p of pacchetti) if (p.ok) this.suRisposta(p)
+    return pacchetti
   }
-
-  /** Apre la linea (da chiamare dentro il gestore di un clic). */
-  apri() {
-    return this.trasporto.apri()
-  }
-
-  /** Aspetta la fine dell'operazione in corso e rilascia la linea. */
-  async chiudi() {
-    try {
-      await this.serializza(() => this.trasporto.chiudi())
-    } finally {
-      this.analizzatore.svuota()
-    }
-  }
-
-  /** Riceve ogni blocco di byte dal trasporto. Se nessuna richiesta è in attesa (per esempio
-   *  una risposta arrivata dopo il timeout) i byte vengono scartati. */
-  private suBlocco(blocco: Uint8Array) {
-    const attesa = this.inAttesa
-    if (!attesa) return
-
-    for (const p of this.analizzatore.ricevi(blocco, attesa.richiesta)) {
-      attesa.trovati.push(p)
-      if (p.ok && !p.eco) this.suRisposta(p)
-    }
-    if (attesa.trovati.some(p => !p.eco)) attesa.fine()   // risposta ricevuta: inutile aspettare ancora
-    else attesa.riarma()                                  // sono arrivati byte: ora conta il silenzio
-  }
-
-  /** Scrive i byte sulla seriale e aspetta la risposta, che l'analizzatore ricompone anche se
-   *  frammentata. Il bus rimanda indietro anche la richiesta (eco): il pacchetto uguale a quello
-   *  inviato viene marcato `eco` e non conta come risposta. Termina appena arriva un pacchetto che
-   *  non è l'eco, dopo `silenzio` ms senza nuovi byte, o dopo `primaAttesa` ms se non arriva
-   *  nulla. Restituisce i pacchetti trovati, con l'esito del checksum. */
-  scambia = (daInviare: number[], primaAttesa = 1000, silenzio = 300) =>
-    this.serializza(async () => {
-      const trovati: Pacchetto[] = []
-      let timer: ReturnType<typeof setTimeout> | undefined
-      let fine: () => void = () => {}
-      const finito = new Promise<void>(r => { fine = r })
-      const arma = (ms: number) => {
-        clearTimeout(timer)
-        timer = setTimeout(fine, ms)
-      }
-
-      this.analizzatore.svuota()   // byte rimasti da uno scambio precedente non c'entrano con questo
-      this.inAttesa = { richiesta: daInviare, trovati, fine, riarma: () => arma(silenzio) }
-      try {
-        arma(primaAttesa)
-        await this.trasporto.scrivi(daInviare)
-        await finito
-      } finally {
-        clearTimeout(timer)
-        this.inAttesa = null
-        this.analizzatore.svuota()   // eventuali byte incompleti rimasti sono scarti
-      }
-      return trovati
-    })
 }

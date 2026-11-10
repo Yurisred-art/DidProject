@@ -1,4 +1,4 @@
-import './App.css'
+// import './App.css'
 import { useServo } from './hooks/useServo'
 import { useTraiettoria } from './hooks/useTraiettoria'
 import { SchedaServo } from './components/SchedaServo'

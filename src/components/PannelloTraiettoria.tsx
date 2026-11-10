@@ -22,7 +22,7 @@ export function PannelloTraiettoria({ bloccato, inMoto, vaiAlPunto, tracciaCerch
   const vel = r > 0 && d > 0 ? velocitaCerchio(r, d) : null
 
   return (
-    <fieldset style={{ marginBottom: 12, marginTop: 50, textAlign: 'left' }}>
+    <fieldset style={{ marginBottom: 12, textAlign: 'left' }}>
       <legend>Traiettoria (mm)</legend>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
